@@ -1,103 +1,82 @@
 import cv2
 import numpy as np
-import os
-def region_of_interest(img, vertices):
-    mask = np.zeros_like(img)
-    cv2.fillPoly(mask, vertices, 255)
-    masked = cv2.bitwise_and(img, mask)
-    return masked
-def draw_lines(img, lines):
-    if lines is None:
-        return img
-    img = np.copy(img)
-    blank_image = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+
+import numpy as np
+
+def average_lines(lines, threshold_slope):
+    left_lines, right_lines = [], []
 
     for line in lines:
-        for x1, y1, x2, y2 in line:
-            cv2.line(blank_image, (x1, y1), (x2, y2), (0, 255, 0), 5)
-    img = cv2.addWeighted(img, 0.8, blank_image, 1, 0.0)
-    return img
-def calculate_curvature_radius(lines, img_shape):
-    if lines is None:
-        return None
-    left_x = []
-    left_y = []
-    right_x = []
-    right_y = []
-    for line in lines:
-        for x1, y1, x2, y2 in line:
-            slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+        x1, y1, x2, y2 = line[0]
+        if x2 != x1:
+            slope = (y2 - y1) / (x2 - x1)
+       
+        
+        if abs(slope) > threshold_slope:
             if slope < 0:
-                left_x.extend([x1, x2])
-                left_y.extend([y1, y2])
-            elif slope > 0:
-                right_x.extend([x1, x2])
-                right_y.extend([y1, y2])
-    if len(left_x) == 0 or len(right_x) == 0:
-        return None
-    left_fit = np.polyfit(left_y, left_x, 2)
-    right_fit = np.polyfit(right_y, right_x, 2)
-    y_eval = img_shape[0]
-    left_curverad = ((1 + (2*left_fit[0]*y_eval + left_fit[1])**2)**1.5) / np.abs(2*left_fit[0])
-    right_curverad = ((1 + (2*right_fit[0]*y_eval + right_fit[1])**2)**1.5) / np.abs(2*right_fit[0])
-    return (left_curverad + right_curverad) / 2
-def process(image):
-    height, width = image.shape[:2]
-    region_of_interest_vertices = [
-        (0, height),
-        (width / 2, height / 2),
-        (width, height)
-    ]
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    canny_image = cv2.Canny(gray_image, 100, 200)
-    cropped_image = region_of_interest(canny_image, np.array([region_of_interest_vertices], np.int32))
-    lines = cv2.HoughLinesP(
-        cropped_image,
-        rho=6,
-        theta=np.pi / 60,
-        threshold=160,
-        lines=np.array([]),
-        minLineLength=40,
-        maxLineGap=25
-    )
-    image_with_lines = draw_lines(image, lines)
-    if lines is not None:
-        slopes = []
-        for line in lines:
-            for x1, y1, x2, y2 in line:
-                slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
-                slopes.append(slope)
-        left_lane = [slope for slope in slopes if slope < -0.5]
-        right_lane = [slope for slope in slopes if slope > 0.5]
-        if len(left_lane) > 0 and len(right_lane) > 0:
-            cv2.putText(image_with_lines, 'Straight', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        elif len(left_lane) > 0:
-            cv2.putText(image_with_lines, 'Left Curve', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        elif len(right_lane) > 0:
-            cv2.putText(image_with_lines, 'Right Curve', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                left_lines.append([x1, y1, x2, y2])
+            else:
+                right_lines.append([x1, y1, x2, y2])
+
+    def avg_line(lines):
+        return np.mean(lines, axis=0, dtype=np.int32) if lines else None
+
+    return avg_line(left_lines), avg_line(right_lines)
+
+def draw_lines(img, line, color=(0, 0, 255), thickness=10):
+    if line is not None:
+        x1, y1, x2, y2 = line
+        cv2.line(img, (x1, y1), (x2, y2), color, thickness)
+
+def get_direction(left_line, right_line, width):
+    if left_line is not None and right_line is not None:
+        mid_x = (left_line[0] + right_line[2]) 
+        if mid_x < width :
+            return "Move left"
+        elif mid_x > 2 * width:
+            return "Move right"
         else:
-            cv2.putText(image_with_lines, 'Lane Change', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        curvature_radius = calculate_curvature_radius(lines, image.shape)
-        if curvature_radius:
-            cv2.putText(image_with_lines, f'Radius of Curvature: {int(curvature_radius)}m', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
-    return image_with_lines
-video_path = 'lane1.mp4'
-if not os.path.exists(video_path):
-    print(f"Error: The file '{video_path}' does not exist.")
-else:
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video '{video_path}'.")
+            return "Go straight"
+    elif left_line is not None:
+        return "Move left"
+    elif right_line is not None:
+        return "Move right"
     else:
-        print(f"Successfully opened video '{video_path}'.")
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                print("Reached the end of the video or cannot read the frame.")
-                break
-            frame = process(frame)
-            cv2.imshow('Lane Detection', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-        cap.release()
-        cv2.destroyAllWindows()
+        return "No lane detected"
+
+
+def process_frame(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 75, 200)
+    height, width = edges.shape
+    mask = np.zeros_like(edges)
+    cv2.fillPoly(mask, np.array([[(0, height), (width / 2, height / 2 + 50), (width, height)]], dtype=np.int32), 255)
+    masked_edges = cv2.bitwise_and(edges, mask)
+
+    lines = cv2.HoughLinesP(masked_edges, 1, np.pi / 180, 30, minLineLength=50, maxLineGap=200)
+    if lines is not None:
+        left_line, right_line = average_lines(lines, threshold_slope=0.5)
+        line_image = np.zeros_like(frame)
+        draw_lines(line_image, left_line)
+        draw_lines(line_image, right_line)
+        direction = get_direction(left_line, right_line, width)
+        cv2.putText(line_image, direction, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        return cv2.addWeighted(frame, 0.8, line_image, 1, 0)
+
+    return frame
+
+def main():
+    cap = cv2.VideoCapture('curved_lane.mp4')
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        cv2.imshow('Lane and Direction Detection', process_frame(frame))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
+
